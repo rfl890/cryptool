@@ -6,11 +6,7 @@ use sha1::digest::DynDigest;
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
 use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
-use std::{
-    fs::File,
-    io::{BufRead, BufReader},
-    path::PathBuf,
-};
+use std::{fs::File, io::{BufRead, BufReader}, io, path::PathBuf};
 
 use crate::{unwrap_continue, vprintln};
 
@@ -35,8 +31,15 @@ enum HashAlgorithm {
 
 #[derive(Args)]
 pub struct HashArgs {
+    /// Hash algorithm to use
     #[arg(short, long, value_enum)]
     algorithm: Option<HashAlgorithm>,
+
+    /// Displays output paths as relative to the current directory instead of absolute
+    #[arg(long, action)]
+    relative_paths: bool,
+
+    /// Files to hash
     files: Vec<PathBuf>,
 }
 
@@ -86,12 +89,11 @@ pub fn handle_hash(hash_args: &HashArgs, verbose: bool) {
         .files
         .iter()
         .filter(|p| {
-            p.try_exists()
-                .inspect_err(|e| {
-                    eprintln!("Failed to read file or directory {}: {}", p.display(), e)
-                })
-                .unwrap_or(false)
-                && p.is_file()
+            if p.exists() {
+                !p.is_dir()
+            } else {
+                true
+            }
         })
         .filter_map(|p| {
             dunce::canonicalize(p)
@@ -102,12 +104,13 @@ pub fn handle_hash(hash_args: &HashArgs, verbose: bool) {
         })
         .unique()
         .collect();
+
     let mut hasher: Box<dyn DynDigest> = get_algorithm_hasher!(algorithm);
 
     for path in file_list {
-        let pathname = &path.display();
-        vprintln!(verbose, "Hashing file {}", pathname);
-        let file = unwrap_continue!(File::open(&path), |e| {
+        let path = &path;
+        let pathname = path.display();
+        let file = unwrap_continue!(File::open(path), |e| {
             eprintln!("Error opening file {}: {}", pathname, e);
         });
         let mut reader = BufReader::with_capacity(BUF_LENGTH, file);
@@ -117,10 +120,10 @@ pub fn handle_hash(hash_args: &HashArgs, verbose: bool) {
                 let buffer = unwrap_continue!(reader.fill_buf(), |e| {
                     eprintln!("Error reading from file {}: {}", pathname, e);
                 });
+
                 let len = buffer.len();
                 if len > 0 {
                     hasher.update(buffer);
-                    vprintln!(verbose, "Read block: {} bytes", len);
                 }
                 len
             };
@@ -134,10 +137,19 @@ pub fn handle_hash(hash_args: &HashArgs, verbose: bool) {
 
         let result = hasher.finalize_reset();
 
+        let relative_path = if hash_args.relative_paths {
+            pathdiff::diff_paths(path, std::env::current_dir().unwrap())
+        } else {
+            None
+        };
+
         println!(
-            "[{}] {}: {}",
+            "[{}] {} {}",
             get_algorithm_string!(algorithm),
-            pathname,
+            relative_path
+                .as_ref()
+                .unwrap_or(path)
+                .display(),
             hex::encode(result)
         );
     }
