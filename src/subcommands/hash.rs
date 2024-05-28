@@ -144,7 +144,7 @@ pub fn handle_hash(hash_args: &HashArgs, verbose: bool) {
         };
 
         println!(
-            "[{}] {} {}",
+            "[{}] {}: {}",
             get_algorithm_string!(algorithm),
             relative_path
                 .as_ref()
